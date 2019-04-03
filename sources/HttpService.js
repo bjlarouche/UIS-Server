@@ -97,14 +97,14 @@ HttpService.JSONDecode = (string) {
 	return JSON.parse(string);
 }
 
-HttpService.PostSync = function(url, body, headers) {
-	if (headers == null || headers == undefined)
-		headers = { 'Content-Type': 'application/json' };
+HttpService.PostSync = function(url, body, header) {
+	if (header == null || header == undefined)
+		header = { 'Content-Type': 'application/json' };
 	else
-		headers['Content-Type'] = 'application/json';
+		header['Content-Type'] = 'application/json';
 
 	var response = syncRequest('POST', url, {
-		'headers': headers,
+		'headers': header,
 		'body': body
 	});
 
@@ -117,11 +117,11 @@ HttpService.PostSync = function(url, body, headers) {
 	}
 }
 
-HttpService.PostAsync = function(url, body, headers) {
-	if (headers == null || headers == undefined)
-		headers = { 'Content-Type': 'application/json' };
+HttpService.PostAsync = function(url, body, header) {
+	if (header == null || header == undefined)
+		header = { 'Content-Type': 'application/json' };
 	else
-		headers['Content-Type'] = 'application/json';
+		header['Content-Type'] = 'application/json';
 
 	fetch(url, { method: 'POST', body: body, headers: headers })
 	.then(function(res) {
@@ -138,16 +138,16 @@ HttpService.PostAsync = function(url, body, headers) {
 	});
 }
 
-HttpService.GetSync = function(url, headers) {
+HttpService.GetSync = function(url, header) {
 	var response = syncRequest('GET', url, {
-      'headers': headers,
+      'headers': header,
     });
 
 	return response;
 }
 
-HttpService.GetAsync = function(url, headers) {
-	fetch(url, { method: 'GET', body: null, headers: headers })
+HttpService.GetAsync = function(url, header) {
+	fetch(url, { method: 'GET', body: null, headers: header })
 	.then(function(res) {
 		return res.text();
 	}).then(function(body) {
