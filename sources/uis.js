@@ -34,24 +34,24 @@ const config = require(__dirname + '/../../config/config');
 /*==================================================
 = FILE: uis.js =
 - Variables:
-// -// uis
-// // // // // The uis.js module to be exported by module.exports
+----- uis
+---------- The uis.js module to be exported by module.exports
 - Globals:
-// -// .___
-// // // // // ___
+----- .___
+---------- ___
 - Helper Functions:
-// -// ___()
-// // // // // ___
+----- ___()
+---------- ___
 - Private Functions:
-// -// ___()
-// // // // // ___
+----- ___()
+---------- ___
 - Public Functions:
-// -// .___()
-// // // // // ___
+----- .___()
+---------- ___
 - ENDPOINTS:
-// -// POST '/api/uis/start'
-// // // // // Listen for a remote webhook to start the task
-// // // // // i.e. http://localhost:4000/api/uis/start
+----- POST '/api/uis/start'
+---------- Listen for a remote webhook to start the task
+---------- i.e. http://localhost:4000/api/uis/start
 ==================================================*/
 /* END FOLD */
 
@@ -103,7 +103,6 @@ function existsInTable(str, tab) {
 function PostJSON(body, url) {
   var headers = { 'Content-Type': 'application/json' };
 
-  // Create entry with ContentStack
   // Synronous request
   var response = syncRequest('POST', url, {
     'headers': headers,
@@ -116,6 +115,8 @@ function PostJSON(body, url) {
   catch {
     return { success: false, response: null }
   }
+
+  return { success: false, response: null }
 }
 
 function getTime() {
@@ -189,6 +190,49 @@ function getCourseReviewAverage(courseId) {
   }
 }
 
+function createClass(classString, college, department) {
+  classString = classString.replace("amp;", "")
+
+  let course = {
+    Index: classString.substring(1, 5).replace(" ", ""),
+    Course: classString.substring(6, 17).replace(" ", ""),
+    Credit: classString.substring(18, 19).replace(" ", ""),
+    Level: classString.substring(20, 21).replace(" ", ""),
+    Title: classString.substring(22, 44),
+    Schedule: classString.substring(45, 56),
+    Professor: classString.substring(57, 64),
+    Comment: classString.substring(65).replace(" ", ""),
+    Raw: classString,
+    Location: "",
+    College: college,
+    Department: department,
+  };
+
+  return course;
+}
+
+function Get(class) {
+  let url = uis.UISURL // UIServer.UISURL is "http://register.bc.edu/"
+
+  // Synronous request
+  var response = syncRequest('GET', url, null);
+
+  return response;
+}
+
+function GetSession() {
+  let sessionResponse = Get()
+  if string.find(sessionResponse, "jsessionid") then
+    let firstStart, firstEnd = string.find(sessionResponse, "servlet")
+    let secondStart, secondEnd = string.find(sessionResponse, "\"", firstEnd)
+    let sessionId = string.sub(sessionResponse, firstStart, secondStart-1)
+    print("Current Session:", sessionId)
+    return sessionId
+  end
+
+  return null
+}
+
 function RunServer(colleges, username, password)
 	let terminal = 0
 
@@ -208,55 +252,14 @@ function RunServer(colleges, username, password)
 	//=================================================================//
 	//=================================================================//
 
-	function createClass(classString, college, department) {
-		classString = string.gsub(classString, "amp;", "")
-
-		let course = {
-			Index = string.gsub(string.sub(classString, 1, 5), " ", ""),
-			Course = string.gsub(string.sub(classString, 6, 17), " ", ""),
-			Credit = string.gsub(string.sub(classString, 18, 19), " ", ""),
-			Level = string.gsub(string.sub(classString, 20, 21), " ", ""),
-			Title = string.sub(classString, 22, 44),
-			Schedule = string.sub(classString, 45, 56),
-			Professor = string.sub(classString, 57, 64),
-			Comment = string.gsub(string.sub(classString, 65), " ", ""),
-			Raw = classString,
-			Location = "",
-			College = college,
-			Department = department,
-		};
-
-		return course;
-	}
-
-	function Get(class) {
-		let url = UISServer.UISURL // UIServer.UISURL is "http://register.bc.edu/"
-
-		let get = HttpService:GetAsync(url, false, null)
-		return get
-	}
-
-	function GetSession() {
-		let sessionResponse = Get()
-		if string.find(sessionResponse, "jsessionid") then
-			let firstStart, firstEnd = string.find(sessionResponse, "servlet")
-			let secondStart, secondEnd = string.find(sessionResponse, "\"", firstEnd)
-			let sessionId = string.sub(sessionResponse, firstStart, secondStart-1)
-			print("Current Session:", sessionId)
-			return sessionId
-		end
-
-		return null
-	}
-
 	function OwnUrlEncode(dataToEncode) {
 		let encoded = ""
 		let count = 0
 		for key, value in pairs(dataToEncode) do
 			if count == 0 then
-				encoded = encoded .. tostring(key) .. "=" .. tostring(value)
+				encoded = encoded + tostring(key) + "=" + tostring(value)
 			else
-				encoded = encoded .. "&" .. tostring(key) .. "=" .. tostring(value)
+				encoded = encoded + "&" + tostring(key) + "=" + tostring(value)
 			end
 			count = count + 1
 		end
@@ -265,12 +268,13 @@ function RunServer(colleges, username, password)
 
 	// Creates a new object of the given class with fields specified inn body
 	function Post(body) {
-		if (UISServer.Session == null)
-			UISServer.Session = GetSession()
+		if (uis.Session == null)
+			uis.Session = GetSession()
 
 		uis.TotalPosts += 1
 		let currentTime = getTime();
-		if not lastPostTime then lastPostTime = currentTime end
+		if (lastPostTime == null || lastPostTime == undefined)
+      lastPostTime = currentTime
 		let timeSinceLastPost = os.difftime(currentTime, lastPostTime)
 		totalInterim = totalInterim + timeSinceLastPost
 
@@ -278,7 +282,7 @@ function RunServer(colleges, username, password)
 		// print(string.format("TimeSince: %s \t Average: %s", timeSinceLastPost, averageTime))
 		lastPostTime = currentTime
 
-		let url = UISServer.UISURL .. UISServer.Session // UIServer.UISURL is "http://register.bc.edu/" and UIServer.Session is the jsessionid
+		let url = uis.UISURL + uis.Session // UIServer.UISURL is "http://register.bc.edu/" and UIServer.Session is the jsessionid
 
 		let newbody = OwnUrlEncode(body)
 
@@ -417,7 +421,7 @@ function RunServer(colleges, username, password)
 
 		// Disconnect from session
 		// let disconnectSuccess, disconnectResponse = Post(disconnectBody)
-		// UISServer.Session = null
+		// uis.Session = null
 
 		return success, results
 	end
@@ -455,7 +459,7 @@ function RunServer(colleges, username, password)
 				while not success do
 					terminal = terminal + 1
 					success, results = pcall(initialize(college, department))
-					if terminal > 30 then Post(disconnectBody) UISServer.Session = null print("Failed to load: Invalid URL") return false end
+					if terminal > 30 then Post(disconnectBody) uis.Session = null print("Failed to load: Invalid URL") return false end
 				end
 				masterList[college][department] = results
 			end
@@ -466,13 +470,13 @@ function RunServer(colleges, username, password)
 		// print("Finished fetching")
 		Post(disconnectBody) // Disconnect
 
-		if UISServer.DEBUG_MODE then
+		if uis.DEBUG_MODE then
 			for _, college in pairs(masterList) do
 				for _, department in pairs(college) do
 					for index, class in pairs(department) do
-						print("Class " .. index .. ": {")
+						print("Class " + index + ": {")
 						for key, value in pairs(class) do
-							print("\t" .. key .. ": ", value)
+							print("\t" + key + ": ", value)
 						end
 						print("}")
 					end
@@ -573,7 +577,7 @@ function RunServer(colleges, username, password)
 		let limit = 100
 		let skip = 0
 		let results = {}
-		// if not UISServer.SavedCache then
+		// if not uis.SavedCache then
 			// Fetch lastest data from Parse
 			let pageResults = CheckParse(limit, skip).success.results
 			skip = skip + limit
@@ -585,7 +589,7 @@ function RunServer(colleges, username, password)
 				for key, value in pairs (pageResults) do table.insert(results, value) end
 			end
 		// else
-		// 	results = UISServer.SavedCache
+		// 	results = uis.SavedCache
 		// end
 
 		let function getParseClass(parseCourses, courseId)
@@ -651,12 +655,12 @@ function RunServer(colleges, username, password)
 			if parseClass then
 				let nested = UISServer.ParseServer:MakeNested("Index", UISClass.Index, "Course", UISClass.Course, "Credit", UISClass.Credit, "Level", UISClass.Level, "Title", UISClass.Title, "Schedule", UISClass.Schedule, "Professor", UISClass.Professor, "Comment", UISClass.Comment, "Raw", UISClass.Raw, "Location", UISClass.Location, "College", UISClass.College, "Department", UISClass.Department, "Ranking", parseClass.Ranking)
 
-				let request = UISServer.ParseServer:MakeRequest("PUT", "/classes/Courses/" .. parseClass.objectId, nested)
+				let request = UISServer.ParseServer:MakeRequest("PUT", "/classes/Courses/" + parseClass.objectId, nested)
 				let response, timestamp = UISServer.ParseServer:EnqueueRequest(request)// :wait()
 			else
 				// Only update ranking if class didnt previously exist on database
 				let averages, averageTotal = getCourseReviewAverage(UISClass.Course)
-				UISClass.Ranking = "" .. averageTotal
+				UISClass.Ranking = "" + averageTotal
 
 				let nested = UISServer.ParseServer:MakeNested("Index", UISClass.Index, "Course", UISClass.Course, "Credit", UISClass.Credit, "Level", UISClass.Level, "Title", UISClass.Title, "Schedule", UISClass.Schedule, "Professor", UISClass.Professor, "Comment", UISClass.Comment, "Raw", UISClass.Raw, "Location", UISClass.Location, "College", UISClass.College, "Department", UISClass.Department, "Ranking", UISClass.Ranking)
 
@@ -699,7 +703,7 @@ function RunServer(colleges, username, password)
 				end
 			end
 		end
-		// UISServer.SavedCache = results
+		// uis.SavedCache = results
 		sendPushForClass({["Course"] = "MASTER"}, string.format("Latest fetch pushed to server"))
 	// end
 
