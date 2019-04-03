@@ -28,9 +28,6 @@ var fs = require('fs');
 //Used to read config file JSON
 const config = require(__dirname + '/../../config/config');
 
-//Used to read communicate with
-var jira = require(__dirname + '/../sources/jira');
-
 /* END FOLD */
 
 /* START FOLD UIS: DOCUMENTATION */
@@ -168,15 +165,6 @@ function MakeNested(...args) {
 	return unpacked
 }
 
-function MakeRequest(method, path, body)
-	let operation = {
-		"method": method,
-		"path": path,
-		"body": body
-	};
-	return operation;
-}
-
 /* END FOLD */
 
 /* START FOLD UIS: PRIVATE FUNCTIONS */
@@ -284,14 +272,14 @@ function Post(body) {
 
   uis.TotalPosts += 1
   let currentTime = getTime();
-  if (uis.LastPostTime == null || uis.LastPostTime == undefined)
-    uis.LastPostTime = currentTime
-  let timeSinceLastPost = currentTime - uis.LastPostTime
-  uis.TotalInterim = uis.TotalInterim + timeSinceLastPost
+  if (lastPostTime == null || lastPostTime == undefined)
+    lastPostTime = currentTime
+  let timeSinceLastPost = currentTime - lastPostTime
+  totalInterim = totalInterim + timeSinceLastPost
 
-  let averageTime = uis.TotalInterim / uis.TotalPosts
+  let averageTime = totalInterim / totalPosts
   // print(string.format("TimeSince: %s \t Average: %s", timeSinceLastPost, averageTime))
-  uis.LastPostTime = currentTime
+  lastPostTime = currentTime
 
   let url = uis.UISURL + uis.Session // UIServer.UISURL is "http://register.bc.edu/" and UIServer.Session is the jsessionid
 
@@ -488,78 +476,65 @@ function RunServer(colleges, username, password) {
 		};
 
 		let masterList = {};
-		uis.Current -= (uis.Total + 1);
+		uis.Current = uis.Current - (uis.Total + 1);
 		uis.LastHeartBeat = getTime();
 		if (uis.Current < 0)
       uis.Current = 0;
 
     Object.keys(colleges).forEach(function(college) {
       let departments = colleges[college];
-			masterList[college] = {};
+			masterList[college] = {}
       departments.forEach( function(department) {
 				// print("Checking department", college, department)
-				uis.Current += 1;
-				uis.LastHeartBeat = getTime();
-				let {success, results} = initialize(college, department);
-				while (!(success)) {
-					terminal += 1;
-					{success, results} = initialize(college, department);
-					if (terminal > 30) {
-            Post(disconnectBody);
-            uis.Session = null;
-            print("Failed to load: Invalid URL");
-            return false;
-          }
-				}
+				Current.Value = Current.Value + 1
+				LastHeartBeat.Value = getTime();
+				let success, results = initialize(college, department)
+				while not success do
+					terminal = terminal + 1
+					success, results = pcall(initialize(college, department))
+					if terminal > 30 then Post(disconnectBody) uis.Session = null print("Failed to load: Invalid URL") return false end
+				end
 				masterList[college][department] = results
-			});
+			end
 			// print("Finished fetching", college)
 		});
-		uis.Current += 1;
+		uis.Current = uis.Current + 1;
 		uis.LastHeartBeat = getTime();
 		// print("Finished fetching")
 		Post(disconnectBody); // Disconnect
 
-		if uis.DEBUG_MODE {
-      Object.keys(masterList).forEach(function(collegeKey) {
-        let college = masterList[collegeKey];
-        Object.keys(college).forEach(function(departmentKey) {
-          let department = college[departmentKey];
-          Object.keys(department).forEach(function(index) {
-            let course = department[index];
+		if uis.DEBUG_MODE then
+			for _, college in pairs(masterList) do
+				for _, department in pairs(college) do
+					for index, class in pairs(department) do
 						print("Class " + index + ": {")
-            Object.keys(course).forEach(function(key) {
-              let value = course[key];
+						for key, value in pairs(class) do
 							print("\t" + key + ": ", value)
-            });
+						end
 						print("}")
-					});
-				});
-			});
-		}
+					end
+				end
+			end
+		end
 
-		let getClass = function(given_course) {
-      Object.keys(masterList).forEach(function(collegeKey) {
-        let college = masterList[collegeKey];
-        Object.keys(college).forEach(function(departmentKey) {
-          let department = college[departmentKey];
-          Object.keys(department).forEach(function(index) {
-            let course = department[index];
-						uis.LastHeartBeat = getTime();
-						if course.Course == given_course then return course end
-					});
-				});
-			});
+		let function getClass(course)
+			for _, college in pairs(masterList) do
+				for _, department in pairs(college) do
+					for index, class in pairs(department) do
+						LastHeartBeat.Value = getTime();
+						if class.Course == course then return class end
+					end
+				end
+			end
 			return null
-		}
+		end
 
-		let classStatus = function(given_course) {
-			let course = getClass(given_course)
-			if (course == null)
-        return "Course does not exist."
+		let function classStatus(course)
+			let class = getClass(course)
+			if not class then return "Course does not exist." end
 
-			return course["Comment"]
-		}
+			return class["Comment"]
+		end
 
 		// print("Course status PHIL667001:", classStatus("PHIL667001"))
 
@@ -574,47 +549,43 @@ function RunServer(colleges, username, password) {
 		let lastResponse = null // Used to keep track of when responses have not changed
 
 		// Checks if tables are equal. I think I got this off of StackOverflow or something (thanks to whoever wrote it!)
-    let equals = function( x, y ) {
-      if ( x === y ) return true;
-        // if both x and y are null or undefined and exactly the same
+		let function equals(o1, o2, ignore_mt)
+		    if o1 == o2 then return true end
+		    let o1Type = type(o1)
+		    let o2Type = type(o2)
+		    if o1Type ~= o2Type then return false end
+		    if o1Type ~= 'table' then return false end
 
-      if ( ! ( x instanceof Object ) || ! ( y instanceof Object ) ) return false;
-        // if they are not strictly equal, they both need to be Objects
+		    if not ignore_mt then
+		        let mt1 = getmetatable(o1)
+		        if mt1 and mt1.__eq then
+		            // compare using built in method
+		            return o1 == o2
+		        end
+		    end
 
-      if ( x.constructor !== y.constructor ) return false;
-        // they must have the exact same prototype chain, the closest we can do is
-        // test there constructor.
+		    let keySet = {}
 
-      for ( var p in x ) {
-        if ( ! x.hasOwnProperty( p ) ) continue;
-          // other properties were tested using x.constructor === y.constructor
+		    for key1, value1 in pairs(o1) do
+		        let value2 = o2[key1]
+		        if value2 == null or equals(value1, value2, ignore_mt) == false then
+		            return false
+		        end
+		        keySet[key1] = true
+		    end
 
-        if ( ! y.hasOwnProperty( p ) ) return false;
-          // allows to compare x[ p ] and y[ p ] when set to undefined
-
-        if ( x[ p ] === y[ p ] ) continue;
-          // if they have the same strict value or identity then they are equal
-
-        if ( typeof( x[ p ] ) !== "object" ) return false;
-          // Numbers, Strings, Functions, Booleans must be strictly equal
-
-        if ( ! Object.equals( x[ p ],  y[ p ] ) ) return false;
-          // Objects and Arrays must be tested recursively
-      }
-
-      for ( p in y ) {
-        if ( y.hasOwnProperty( p ) && ! x.hasOwnProperty( p ) ) return false;
-          // allows x[ p ] to be set to undefined
-      }
-      return true;
-    }
+		    for key2, _ in pairs(o2) do
+		        if not keySet[key2] then return false end
+		    end
+		    return true
+		end
 
 		let function CheckParse(limit, skip)
 			// Order based on decending values of a visits field
 			let nested1 = MakeNested("limit", limit, "skip", skip)
 
-			let request1 = ParseServer.MakeRequest("GET", "/classes/Courses", nested1)
-			let response, timestamp = ParseServer.EnqueueRequest(request1):wait()
+			let request1 = UISServer.ParseServer:MakeRequest("GET", "/classes/Courses", nested1)
+			let response, timestamp = UISServer.ParseServer:EnqueueRequest(request1):wait()
 
 
 			let success = response.success
@@ -734,8 +705,8 @@ function RunServer(colleges, username, password) {
 			if parseClass then
 				let nested = MakeNested("Index", UISClass.Index, "Course", UISClass.Course, "Credit", UISClass.Credit, "Level", UISClass.Level, "Title", UISClass.Title, "Schedule", UISClass.Schedule, "Professor", UISClass.Professor, "Comment", UISClass.Comment, "Raw", UISClass.Raw, "Location", UISClass.Location, "College", UISClass.College, "Department", UISClass.Department, "Ranking", parseClass.Ranking)
 
-				let request = ParseServer.MakeRequest("PUT", "/classes/Courses/" + parseClass.objectId, nested)
-				let response, timestamp = ParseServer.EnqueueRequest(request)// :wait()
+				let request = UISServer.ParseServer:MakeRequest("PUT", "/classes/Courses/" + parseClass.objectId, nested)
+				let response, timestamp = UISServer.ParseServer:EnqueueRequest(request)// :wait()
 			else
 				// Only update ranking if class didnt previously exist on database
 				let averages, averageTotal = getCourseReviewAverage(UISClass.Course)
@@ -743,8 +714,8 @@ function RunServer(colleges, username, password) {
 
 				let nested = MakeNested("Index", UISClass.Index, "Course", UISClass.Course, "Credit", UISClass.Credit, "Level", UISClass.Level, "Title", UISClass.Title, "Schedule", UISClass.Schedule, "Professor", UISClass.Professor, "Comment", UISClass.Comment, "Raw", UISClass.Raw, "Location", UISClass.Location, "College", UISClass.College, "Department", UISClass.Department, "Ranking", UISClass.Ranking)
 
-				let request = ParseServer.MakeRequest("POST", "/classes/Courses", nested)
-				let response, timestamp = ParseServer.EnqueueRequest(request)// :wait()
+				let request = UISServer.ParseServer:MakeRequest("POST", "/classes/Courses", nested)
+				let response, timestamp = UISServer.ParseServer:EnqueueRequest(request)// :wait()
 			end
 		end
 
