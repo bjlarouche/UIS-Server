@@ -77,7 +77,7 @@ var HttpService = require(__dirname + '/../sources/HttpService');
 var uis = {}; // The uis.js module to be exported by module.exports
 
 uis.DEBUG_MODE = false;
-uis.USE_SAVED = true;
+uis.USE_SAVED = false;
 uis.UISURL = "https://registration.bc.edu/servlet";
 
 uis.Username = config.UIS.username;
