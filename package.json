@@ -32,6 +32,7 @@
     "npm": "^6.5.0",
     "oauth": "^0.9.15",
     "oauth-rest-atlassian": "^0.4.25",
+    "parse": "^2.4.0",
     "pretty-remarkable": "^0.4.1",
     "pug": "^2.0.1",
     "remarkable": "^1.7.1",
