@@ -8,7 +8,7 @@
 var config = {
   "UIS": {
     username: "larouchb",
-    //password: authStash.UIS.larouchb
+    password: authStash.UIS.larouchb
   }
 }
 

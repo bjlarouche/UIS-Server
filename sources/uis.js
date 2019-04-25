@@ -80,8 +80,8 @@ uis.DEBUG_MODE = false;
 uis.USE_SAVED = false;
 uis.UISURL = "https://registration.bc.edu/servlet";
 
-uis.Username = ENV['username'];//config.UIS.username;
-uis.Password = ENV['password'];//config.UIS.password;
+uis.Username = config.UIS.username;
+uis.Password = config.UIS.password;
 
 uis.Session = ";jsessionid=02BB40FB884B67D8E4E9165621CDEEB6";
 uis.SavedCache = null;
