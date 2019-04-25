@@ -135,19 +135,19 @@ function makeBody(data) {
 // let Signal = require(script.Signal)
 
 // Returns a table where the odd parameters are the key and even parameters are the value
-ParseServer.MakeNested = function(...args) {
-	let packed = {...args};
-	let unpacked = {};
-
-  Object.keys(packed).forEach(function(key) {
-    if (key % 2 == 1) {
-      let value = packed[key];
-			unpacked[value] = packed[key+1];
-		}
-  });
-
-	return unpacked
-}
+// ParseServer.MakeNested = function(...args) {
+// 	let packed = {...args};
+// 	let unpacked = {};
+//
+//   Object.keys(packed).forEach(function(key) {
+//     if (key % 2 == 1) {
+//       let value = packed[key];
+// 			unpacked[value] = packed[key+1];
+// 		}
+//   });
+//
+// 	return unpacked
+// }
 
 // Formats the request as Parse is expecting from REST for batching
 ParseServer.MakeRequest = function(method, path, body) {
@@ -196,7 +196,7 @@ ParseServer.Post = function(course, body) {
 ParseServer.CloudCode = function (functionId, rawContent) {
 	// functionId and actionId must be supported/handled by cloud code
 	let url = ParseServer.Url + "/functions/" + functionId;
-	
+
 	let header = {
 		"X-Parse-Application-Id": ParseServer.AppId,
 		"X-Parse-REST-API-Key": ParseServer.RESTKey,
