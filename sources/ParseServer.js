@@ -196,7 +196,7 @@ ParseServer.Post = function(course, body) {
 ParseServer.CloudCode = function (functionId, rawContent) {
 	// functionId and actionId must be supported/handled by cloud code
 	let url = ParseServer.Url + "/functions/" + functionId;
-	print("Sending push notification to: " + url)
+	
 	let header = {
 		"X-Parse-Application-Id": ParseServer.AppId,
 		"X-Parse-REST-API-Key": ParseServer.RESTKey,
