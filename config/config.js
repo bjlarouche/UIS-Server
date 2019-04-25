@@ -3,12 +3,12 @@
 
 // Author(s): Brandon LaRouche
 
-var authStash = JSON.parse(require('fs').readFileSync(__dirname + '/../config/auth_stash.js', "utf8"));
+//var authStash = JSON.parse(require('fs').readFileSync(__dirname + '/../config/auth_stash.js', "utf8"));
 
 var config = {
   "UIS": {
     username: "larouchb",
-    password: authStash.UIS.larouchb
+    //password: authStash.UIS.larouchb
   }
 }
 
