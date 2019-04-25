@@ -18,6 +18,9 @@ var syncRequest = require('sync-request');
 // To read/write files
 var fs = require('fs');
 
+// For console progress bar
+const cliProgress = require('cli-progress');
+
 /* END FOLD */
 
 /* START FOLD REQUIRE OTHER SOURCE FILES */
@@ -26,10 +29,18 @@ var fs = require('fs');
 ==================================================*/
 
 //Used to read config file JSON
-const config = require(__dirname + '/../../config/config');
+const config = require(__dirname + '/../config/config');
 
-//Used to read communicate with
-var jira = require(__dirname + '/../sources/jira');
+// Used to read communicate with Parse
+var ParseServer = require(__dirname + '/../sources/ParseServer');
+
+// Official parse npm module
+const Parse = require('parse/node');
+Parse.initialize("uIGaipSp2UYvOjNl6qrSTUsfZVmn9l5Ig8J2LuSS", "OW9jaqSwKdYw93xuL43whvw1258bbcZVBFpqMAvp", "MldAU91v4yGkdWKvj2YnNsapjce8HNFwRXGWbV9z");
+Parse.serverURL = 'https://parseapi.back4app.com'
+
+// Used for Http requests
+var HttpService = require(__dirname + '/../sources/HttpService');
 
 /* END FOLD */
 
@@ -65,10 +76,14 @@ var jira = require(__dirname + '/../sources/jira');
 
 var uis = {}; // The uis.js module to be exported by module.exports
 
-uis.DEBUG_MODE = true;
+uis.DEBUG_MODE = false;
+uis.USE_SAVED = true;
 uis.UISURL = "https://registration.bc.edu/servlet";
 
-uis.Session = null;
+uis.Username = config.UIS.username;
+uis.Password = config.UIS.password;
+
+uis.Session = ";jsessionid=02BB40FB884B67D8E4E9165621CDEEB6";
 uis.SavedCache = null;
 uis.LastPostTime = null;
 uis.TotalInterim = 0;
@@ -78,8 +93,11 @@ uis.Total = 0;
 uis.Current = 0;
 uis.LastHeartBeat = null;
 
+uis.UISProgressBar = new cliProgress.Bar({ format: 'Fetching courses from UIS [{bar}] {percentage}% | {value}/{total} Departments'}, cliProgress.Presets.shades_classic);
+uis.UpdateProgressBar = new cliProgress.Bar({ format: 'Updating courses in Parse andd fetching rating from Avalanche if needed [{bar}] {percentage}% | {value}/{total} Courses'}, cliProgress.Presets.shades_classic);
 
-// uis.importantFields = JSON.parse(fs.readFileSync(__dirname + '/../data/important_fields.json', 'utf8')); // Reading the .json file Synchronously and parsing into JSON
+
+uis.SavedMasterList = JSON.parse(fs.readFileSync(__dirname + '/../data/saved_masterList.js', 'utf8')); // Reading the .json file Synchronously and parsing into JSON
 
 /* END FOLD */
 
@@ -106,20 +124,12 @@ function existsInTable(str, tab) {
 function PostJSON(body, url) {
   var headers = { 'Content-Type': 'application/json' };
 
-  // Synronous request
-  var response = syncRequest('POST', url, {
-    'headers': headers,
-    'body': JSON.stringify(body)
-  });
+  let newBody = HttpService.JSONEncode(body)
 
-  try {
-    return { success: true, response: JSON.parse(response.getBody()) };
-  }
-  catch {
-    return { success: false, response: null }
-  }
+  let response;
+  [success, response] = HttpService.PostAsync(url, newBody)
 
-  return { success: false, response: null }
+  return response;
 }
 
 function getTime() {
@@ -154,27 +164,40 @@ function OwnUrlEncode(dataToEncode) {
   return encoded;
 }
 
-function MakeNested(...args) {
- 	let packed = {...args};
-	let unpacked = {};
+// Checks if tables are equal. I think I got this off of StackOverflow or something (thanks to whoever wrote it!)
+let equals = function( x, y ) {
+  if ( x === y ) return true;
+    // if both x and y are null or undefined and exactly the same
 
-  Object.keys(packed).forEach(function(key) {
-    if (key % 2 == 1) {
-      let value = packed[key];
-			unpacked[value] = packed[key+1];
-		}
-  });
+  if ( ! ( x instanceof Object ) || ! ( y instanceof Object ) ) return false;
+    // if they are not strictly equal, they both need to be Objects
 
-	return unpacked
-}
+  if ( x.constructor !== y.constructor ) return false;
+    // they must have the exact same prototype chain, the closest we can do is
+    // test there constructor.
 
-function MakeRequest(method, path, body)
-	let operation = {
-		"method": method,
-		"path": path,
-		"body": body
-	};
-	return operation;
+  for ( var p in x ) {
+    if ( ! x.hasOwnProperty( p ) ) continue;
+      // other properties were tested using x.constructor === y.constructor
+
+    if ( ! y.hasOwnProperty( p ) ) return false;
+      // allows to compare x[ p ] and y[ p ] when set to undefined
+
+    if ( x[ p ] === y[ p ] ) continue;
+      // if they have the same strict value or identity then they are equal
+
+    if ( typeof( x[ p ] ) !== "object" ) return false;
+      // Numbers, Strings, Functions, Booleans must be strictly equal
+
+    if ( ! Object.equals( x[ p ],  y[ p ] ) ) return false;
+      // Objects and Arrays must be tested recursively
+  }
+
+  for ( p in y ) {
+    if ( y.hasOwnProperty( p ) && ! x.hasOwnProperty( p ) ) return false;
+      // allows x[ p ] to be set to undefined
+  }
+  return true;
 }
 
 /* END FOLD */
@@ -184,92 +207,295 @@ function MakeRequest(method, path, body)
 = UIS: PRIVATE FUNCTIONS =
 ==================================================*/
 
-function getCourseReviewAverage(courseId) {
+// Prints list of created courses
+// Only called if uis.DEBUG_MODE == true
+function outputMasterList(masterList) {
+  Object.keys(masterList).forEach(function(collegeKey) {
+    let college = masterList[collegeKey];
+    Object.keys(college).forEach(function(departmentKey) {
+      let department = college[departmentKey];
+      Object.keys(department).forEach(function(index) {
+        let course = department[index];
+        print("Class " + index + ": {")
+        Object.keys(course).forEach(function(key) {
+          let value = course[key];
+          print("\t" + key + ": ", value)
+        });
+        print("}")
+      });
+    });
+  });
+}
+
+// Determines if a course has changed from CLOSED to OPEN status
+let shouldSendOpenPush = function(UISClass, parseClass) {
+  if (UISClass == null || UISClass == undefined)
+    return false
+  if (parseClass == null || parseClass == undefined)
+    return false
+
+  if (UISClass.Comment == parseClass.get("Comment"))
+    return false;
+  if (!(parseClass.get("Comment").includes("CLOSED")))
+    return false;
+  if (!(UISClass.Comment.includes("CLOSED")))
+    return true;
+
+  return false;
+}
+
+// Determines if a course has changed from OPEN to CLOSED status
+let shouldSendClosePush = function(UISClass, parseClass) {
+  if (UISClass == null || UISClass == undefined)
+    return false
+  if (parseClass == null || parseClass == undefined)
+    return false
+
+  if (UISClass.Comment.toString() == parseClass.get("Comment"))
+    return false;
+    if (!(UISClass.Comment.includes("CLOSED")))
+      return false;
+    if (!(parseClass.get("Comment").includes("CLOSED")))
+      return true;
+
+  return false
+}
+
+// Uses ParseServer to trigger Cloud Code "push" function to send a push notification to clients subscribing to the given Course identifier
+let sendPushForClass = function(parseClass, message) {
+  let data = {
+    "alert": message,
+    "sender": "UIS",
+    "badge": "increment",
+    "sound": "solemn.mp3",
+    "target": parseClass.get("Course"),
+  }
+
+  let response = ParseServer.CloudCode("push", data);
+}
+
+let getCourseFromList = function(course_id, masterList) {
+  Object.keys(masterList).forEach(function(collegeKey) {
+    let college = masterList[collegeKey];
+    Object.keys(college).forEach(function(departmentKey) {
+      let department = college[departmentKey];
+      Object.keys(department).forEach(function(index) {
+        let course = department[index];
+        uis.LastHeartBeat = getTime();
+        if (course.Course == given_course)
+          return course;
+      });
+    });
+  });
+  return null
+}
+
+let CheckParse = async function(limit, skip) {
+  const Courses = Parse.Object.extend("Courses");
+  const query = new Parse.Query(Courses);
+  query.limit(100000);
+  const results = await query.find();
+  print("Successfully retrieved " + results.length + " courses.");
+
+  let responseSuccess = results.length <= 0 ? false : true;
+  if (!(responseSuccess)) {
+     // Request failed: skip the wait time and try again
+     print("CheckParse not successful.")
+     return [];
+  }
+
+  return results;
+}
+
+let classNeedsUpdate = function(UISClass, parseClass) {
+  if (UISClass == null || UISClass == undefined)
+    return false
+  if (parseClass == null || parseClass == undefined)
+    return false
+  Object.keys(UISClass).forEach(function(key) {
+    let value = UISClass[key];
+    if (value != parseClass.get(key))
+      return true
+  });
+  return false
+}
+
+let updateClass = async function (UISClass, parseClass) {
+  if (UISClass == null || UISClass == undefined)
+    return false
+  if (UISClass.Course == "-19Fall(E")
+    return false
+  if (UISClass.Course == "-20Fall(E")
+    return false
+  if (UISClass.Course == "-21Fall(E")
+    return false
+  if (UISClass.Level == "er")
+    return false
+  if( UISClass.Title == " U for Summer, S for Sp")
+    return false
+  if (UISClass.Raw == "=2018-19 Fall  (Enter U for Summer, S for Spring)")
+    return false
+  if (UISClass.Raw == "=2019-20 Fall  (Enter U for Summer, S for Spring)")
+    return false
+  if (UISClass.Raw == "=2020-21 Fall  (Enter U for Summer, S for Spring)")
+    return false
+  if (UISClass.Raw == "2018-19 Spring")
+    return false
+  if (UISClass.Raw == "2019-20 Spring")
+    return false
+  if (UISClass.Raw == "2020-21 Spring")
+    return false
+  if (UISClass.Raw == "=2018-19 Spring                                  ")
+    return false
+  if (UISClass.Index == "=2018")
+    return false
+  if (UISClass.Index == "=2019")
+    return false
+  if (UISClass.Raw == "=2019-20 Spring                                  ")
+     return false
+ if (UISClass.Raw == "=2020")
+        return false
+  if (UISClass.Raw == "=2020-21 Fall                                  ")
+     return false
+
+  if (parseClass != null && parseClass != undefined) { // Course is in the database, update the exisiting one
+    parseClass.set("Index", UISClass.Index);
+    parseClass.set("Course", UISClass.Course);
+    parseClass.set("Credit", UISClass.Credit);
+    parseClass.set("Level", UISClass.Level);
+    parseClass.set("Title", UISClass.Title);
+    parseClass.set("Schedule", UISClass.Schedule);
+    parseClass.set("Professor", UISClass.Professor);
+    parseClass.set("Comment", UISClass.Comment);
+    parseClass.set("Raw", UISClass.Raw);
+    parseClass.set("Location", UISClass.Location);
+    parseClass.set("College", UISClass.College);
+    parseClass.set("Department", UISClass.Department);
+    parseClass.set("Ranking", parseClass.get("Ranking"));
+
+    let updatedClass = await parseClass.save();
+  }
+  else { // Course is not yet in the database, create a new one
+    // Only update ranking if class didnt previously exist on database
+    let averages, averageTotal;
+    [averages, averageTotal] = await getCourseReviewAverage(UISClass.Course)
+    UISClass.Ranking = "" + averageTotal
+
+    var Courses = Parse.Object.extend("Courses");
+    var parseClass = new Courses();
+
+    parseClass.set("Index", UISClass.Index);
+    parseClass.set("Course", UISClass.Course);
+    parseClass.set("Credit", UISClass.Credit);
+    parseClass.set("Level", UISClass.Level);
+    parseClass.set("Title", UISClass.Title);
+    parseClass.set("Schedule", UISClass.Schedule);
+    parseClass.set("Professor", UISClass.Professor);
+    parseClass.set("Comment", UISClass.Comment);
+    parseClass.set("Raw", UISClass.Raw);
+    parseClass.set("Location", UISClass.Location);
+    parseClass.set("College", UISClass.College);
+    parseClass.set("Department", UISClass.Department);
+    parseClass.set("Ranking", averageTotal.toString());
+
+    let updatedClass = await parseClass.save();
+  }
+
+  return true;
+}
+
+async function getCourseReviewAverage(courseId) {
+  if (courseId == undefined || courseId == null)
+    return [{}, null];
+
   courseId = courseId.replace(" ", "");
 
-  let courseReviews = uis.GetCourseReviews(courseId);
-  let returnTable = JSON.parse(courseReviews);
-  if (returnTable.length <= 0)
-    return { averages: {}, averageTotal: null }
+  let returnTable = await uis.GetCourseReviews(courseId);
+  if (Object.keys(returnTable).length <= 0)
+    return [{}, null]
 
-  for (var i = 0; i < returnTable.length; i++) { // Iterate on members of the array
-    var course = returnTable[i]
+  for (let key in returnTable) { // Iterate on members of the array
+    var course = returnTable[key]
 
-    let averages = {}
+    let averages = []
     let averageNumeratorSum = 0
     let averageDenominatorSum = 0
-    let courseRankings = {}
+    let courseRankings = []
 
     for (var j = 0; j < course.length; j++) { // Iterate on members of the array
       var value = course[j]
-
       if (j == 0) {
         value = value.replace("<\/?[^>]+>", "")
 
-        let matches = getMatches(value, "[^\r\n]+");
+        let matches = value.match(/[^\r\n]+/g);
         for (var k = 0; k < matches.length; k++) {
           let courseRanking = matches[k];
 
-          let average = courseRanking.match("%[(.-)%]")
-          if courseRanking.includes("Boston College Past Course Evaluations Search")
-            return { averages: {}, averageTotal: 0 }
+          let average = courseRanking.match(/[1-9][0-9]*\/[1-9][0-9]*/)
+          if (courseRanking.includes("Boston College Past Course Evaluations Search"))
+            return [{}, 0]
 
-          if (average) {
+          if (average != null) {
+            average = average.toString();
             let startIndex = average.indexOf('/');
-            let numerator = average.substring(1, startIndex - 1);
+            let numerator = average.substring(0, startIndex);
             let denominator = average.substring(startIndex + 1);
-            averageNumeratorSum = averageNumeratorSum + numerator;
-            averageDenominatorSum = averageDenominatorSum + denominator;
+            averageNumeratorSum = averageNumeratorSum + parseInt(numerator);
+            averageDenominatorSum = averageDenominatorSum + parseInt(denominator);
 
             averages.push(average);
             courseRankings.push(courseRanking);
           }
         }
       }
-    });
+    }
     let averageTotal = averageNumeratorSum / averageDenominatorSum;
 
-    return { averages: averages, averageTotal: averageTotal }
+    return [averages, averageTotal]
   }
+
+  return [[], 0]
 }
 
 function createClass(classString, college, department) {
   classString = classString.replace("amp;", "")
 
   let course = {
-    Index: classString.substring(1, 5).replace(" ", ""),
-    Course: classString.substring(6, 17).replace(" ", ""),
-    Credit: classString.substring(18, 19).replace(" ", ""),
-    Level: classString.substring(20, 21).replace(" ", ""),
-    Title: classString.substring(22, 44),
-    Schedule: classString.substring(45, 56),
-    Professor: classString.substring(57, 64),
-    Comment: classString.substring(65).replace(" ", ""),
+    Index: classString.substring(0, 4).replace(" ", ""),
+    Course: classString.substring(5, 16).replace(" ", ""),
+    Credit: classString.substring(17, 18).replace(" ", ""),
+    Level: classString.substring(19, 20).replace(" ", ""),
+    Title: classString.substring(21, 43),
+    Schedule: classString.substring(44, 55),
+    Professor: classString.substring(56, 63),
+    Comment: classString.substring(64).replace(" ", ""),
     Raw: classString,
     Location: "",
     College: college,
-    Department: department,
+    Department: department
   };
 
   return course;
 }
 
-function Get(class) {
+function getSessionResponse() {
   let url = uis.UISURL; // UIServer.UISURL is "http://register.bc.edu/"
 
   // Synronous request
-  var response = syncRequest('GET', url, null);
+  var response = HttpService.GetSync(url, null);
 
   return response;
 }
 
 function GetSession() {
-  let sessionResponse = Get()
-  if (sessionResponse.includes("jsessionid")) {
-    let firstStart = sessionResponse.indexOf("servlet");
-    let newString = sessionResponse.substring(firstStart);
-    let firstEnd = newString.indexOf("\"");
+  let sessionResponse = JSON.stringify(getSessionResponse().headers["set-cookie"])
+  if (sessionResponse.includes("JSESSIONID")) {
+    let firstLookup = "JSESSIONID="
+    let firstStart = sessionResponse.indexOf(firstLookup);
+    let newString = sessionResponse.substring(firstStart + firstLookup.length);
+    let firstEnd = newString.indexOf(";");
     let sessionId = newString.substring(0, firstEnd - 1);
+    sessionId = ";jsessionid=" + sessionId;
     print("Current Session: ", sessionId)
     return sessionId
   }
@@ -278,7 +504,7 @@ function GetSession() {
 }
 
 // Creates a new object of the given class with fields specified inn body
-function Post(body) {
+async function Post(body) {
   if (uis.Session == null)
     uis.Session = GetSession();
 
@@ -295,14 +521,27 @@ function Post(body) {
 
   let url = uis.UISURL + uis.Session // UIServer.UISURL is "http://register.bc.edu/" and UIServer.Session is the jsessionid
 
-  let newbody = OwnUrlEncode(body)
+  //let newBody = OwnUrlEncode(body)
 
-  let success, response = pcall(function() return HttpService:PostAsync(url, newbody, Enum.HttpContentType.ApplicationUrlEncoded, false, null) end)
+  try {
+    let response = await HttpService.PostUISAsync(url, body, null).catch((err) => { console.log(err) });;
+    let success = response.length <= 0 ? false : true;
+    //print("Posted to [" + url + "] with body \n\t" + JSON.stringify(body))
+    //print(response);
+    return [success, response]; // Returns in form: [success, response]
+  } catch (err) {
+    //print("Posted to [" + url + "] with body \n\t" + JSON.stringify(body))
+    print('ERROR:' + err);
+    return [false, ""];
+  }
 
-  return { success: success, response: response }
+  // let response = await HttpService.PostSync(url, body, null);
+  // let success = response.length <= 0 ? false : true;
+  //
+  // return [success, response]; // Returns in form: [success, response]
 }
 
-function initialize(college, department) {
+async function initialize(terminal) {
   let disconnectBody = {
     "disconnect": "Disconnect",
     "dumpfile": "",
@@ -312,7 +551,10 @@ function initialize(college, department) {
     "render": "",
     "org.h3270.Terminal.id": terminal
   };
-  //let {success, disconnectResponse: response} = Post(disconnectBody)
+  // Success already declared
+  //let success;
+  let disconnectSuccess, disconnectResponse;
+  //[disconnectSuccess, disconnectResponse] = await Post(disconnectBody)
 
   let connectBody = {
     "hostname": "bcvmcms.bc.edu",
@@ -322,7 +564,8 @@ function initialize(college, department) {
     "render": "",
     "org.h3270.Terminal.id": terminal
   };
-  let {success, connectResponse: response} = Post(connectBody);
+  let connectResponse;
+  [success, connectResponse] = await Post(connectBody);
 
   let makeSessionBody = {
     "field_1_0": "LOOK",
@@ -331,29 +574,31 @@ function initialize(college, department) {
     "key": "enter",
     "org.h3270.Terminal.id": terminal
   };
-  let {success, makeSessionResponse: response} = Post(makeSessionBody);
-  let needsConnection = makeSessionResponse.includes("CONNECT button");
+  let makeSessionResponse;
+  //[success, makeSessionResponse] = await Post(makeSessionBody).catch((err) => { console.log(err) });;
+  needsConnection = connectResponse.includes("CONNECT button");
   if (needsConnection)
-    {success, connectResponse: response} = Post(connectBody);
+    [success, makeSessionResponse] = await Post(makeSessionBody).catch((err) => { console.log(err) });;
 
   let loginBody = {
-    "field_45_6": username,
-    "field_45_8": password,
+    "field_45_6": uis.Username,
+    "field_45_8": uis.Password,
     "field_57_20": "",
     "key": "enter",
     "org.h3270.Terminal.id": terminal
   };
-  let {success, loginResponse: response} = Post(loginBody);
+  let loginResponse
+  [success, loginResponse] = await Post(loginBody);
   let found = loginResponse.includes("ENTER YOUR ID OR USERNAME");
   let authFailed = loginResponse.includes("AUTHENTICATION FAILED");
   let tryCount = 0;
   while (found || authFailed) {
     if (tryCount > 5) {
-      print("ERROR: Login failed.");
-      return { success: false, results: {} };
+      let tempDisconnect = await Post(disconnectBody);
+      throw "ERROR: Login failed.";
     }
     tryCount = tryCount + 1;
-    {success, loginResponse: response} = Post(loginBody);
+    [success, loginResponse] = await Post(loginBody);
     found = loginResponse.includes("ENTER YOUR ID OR USERNAME");
     authFailed = loginResponse.includes("AUTHENTICATION FAILED");
   }
@@ -366,17 +611,18 @@ function initialize(college, department) {
     "key": "enter",
     "org.h3270.Terminal.id": terminal
   };
-  let {success, uviewResponse: response} = Post(uviewBody);
-  let found = uviewResponse.includes("STUDENT INFORMATION");
+  let uviewResponse;
+  [success, uviewResponse] = await Post(uviewBody);
+  found = uviewResponse.includes("STUDENT INFORMATION");
   let skip = uviewResponse.includes("INSTRUCTOR");
-  let tryCount = 0;
+  tryCount = 0;
   while (!(found || skip)) {
     if (tryCount > 5) {
       print("ERROR: UIVIEW failed.");
-      return { success: false, results: {} };
+      return [false, {}];
     }
     tryCount = tryCount + 1;
-    {success, uviewResponse: : response} = Post(uviewBody);
+    [success, uviewResponse] = await Post(uviewBody);
     found = uviewResponse.includes("STUDENT INFORMATION");
   }
 
@@ -385,18 +631,19 @@ function initialize(college, department) {
     "key": "enter",
     "org.h3270.Terminal.id": terminal
   };
-  let {success, studentResponse: response} = Post(studentBody);
-  let found = studentResponse.includes("BUILDING");
-  let skip = studentResponse.includes("INSTRUCTOR");
+  let studentResponse;
+  [success, studentResponse] = await Post(studentBody);
+  found = studentResponse.includes("BUILDING");
+  skip = studentResponse.includes("INSTRUCTOR");
   let skip2 = studentResponse.includes("STUDENT INFORMATION");
-  let tryCount = 0;
+  tryCount = 0;
   while (!(found || skip || skip2)) {
     if (tryCount > 5) {
       print("ERROR: Student information failed.");
-      return { success: false, results: {} };
+      [false, {}];
     }
-    tryCount = tryCount + 1
-    {success, studentResponse: response} = Post(studentBody);
+    tryCount += 1;
+    [success, studentResponse] = await Post(studentBody);
     found = studentResponse.includes("BUILDING")
   }
 
@@ -405,8 +652,15 @@ function initialize(college, department) {
     "key": "enter",
     "org.h3270.Terminal.id": terminal
   };
-  let {success, coursesReponse: response} = Post(coursesBody);
+  let coursesReponse;
+  [success, coursesReponse] = await Post(coursesBody);
 
+  let initializeSuccess = coursesReponse.includes("SEARCH COURSES") ? true : false;
+
+  return initializeSuccess
+}
+
+async function extractCourses(college, department, terminal) {
   let searchBody = {
     "field_23_1": "S",
     "field_23_2": department,
@@ -416,38 +670,89 @@ function initialize(college, department) {
     "key": "enter",
     "org.h3270.Terminal.id": terminal
   };
-  let {success, searchResponse: response} = Post(searchBody);
+  let success, searchResponse;
+  [success, searchResponse] = await Post(searchBody);
 
-  let results = {}
+  let results = []
   while (searchResponse.includes("Press RETURN/ENTER to Page Forward")) {
     // print("**NEW PAGE**")
-    let searchPosition = 1;
+    let searchPosition = 0;
 
-    while string.find(searchResponse, "\<span class\=\"h3270\-intensified\"\>", searchPosition, true) {
-      let firstStart, firstEnd = string.find(searchResponse, "\<span class\=\"h3270\-intensified\"\>", searchPosition, true)
-      let secondStart, secondEnd = string.find(searchResponse, "\<\/span\>", firstEnd)
-      let classString = string.sub(searchResponse, firstEnd+1, secondStart-1)
+    while (searchResponse.includes("\<span class\=\"h3270\-intensified\"\>", searchPosition)) {
+      let firstLookup = "\<span class\=\"h3270\-intensified\"\>";
+      let firstStart = searchResponse.indexOf(firstLookup, searchPosition);
+      let firstEnd = firstStart + firstLookup.length;
+      let secondLookup = "\<\/span\>";
+      let secondStart = searchResponse.indexOf(secondLookup, firstEnd)
+      let secondEnd = secondStart + secondLookup.length
+      let classString = searchResponse.substring(firstEnd, secondStart)
 
       searchPosition = secondEnd
 
-      if (!(classString.includes("\=2017") || classString.includes("Dept\/Subj\/Course") || classString.includes("Press RETURN"))) {
+      if (!(classString.includes("\=2019-20 Spring") || classString.includes("er U for Summer") || classString.includes("Dept\/Subj\/Course") || classString.includes("Press RETURN"))) {
         let course = createClass(classString, college, department);
         results.push(course);
+        //print("Found course: " + JSON.stringify(course));
       }
     }
 
-    {success, searchResponse: response} = Post(searchBody)
+    [success, searchResponse] = await Post(searchBody)
   }
-  // if string.find(searchResponse, "Press RETURN/ENTER to Restart") then print("All loaded") end
+  // if searchResponse.includes(, "Press RETURN/ENTER to Restart") { print("All loaded") }
 
   // Disconnect from session
-  // let disconnectSuccess, disconnectResponse = Post(disconnectBody)
+  // let disconnectSuccess, disconnectResponse = await Post(disconnectBody)
   // uis.Session = null
 
-  return { success: success, results: results }
+  return [success, results];
 }
 
-function RunServer(colleges, username, password) {
+function getParseClass(parseCourses, courseId) {
+  if (courseId == null || courseId == undefined)
+    return null;
+  for (let i = 0; i < parseCourses.length; i++) {
+    let parseClass = parseCourses[i];
+    if (parseClass.get('Course') == courseId)
+      return parseClass;
+  }
+  return null;
+}
+
+async function terminateSession(terminal) {
+  let disconnectBody = {
+		"disconnect": "Disconnect",
+		"dumpfile": "",
+		"dump": "Dump",
+		"colorscheme": "",
+		"font": "",
+		"render": "",
+		"org.h3270.Terminal.id": terminal
+	};
+
+  let backBody = {
+    "field_23_1": "",
+    "field_23_2": "QUIT",
+    "field_23_3": "",
+    "field_27_4": "",
+    "field_56_4": "",
+    "key": "enter",
+    "org.h3270.Terminal.id": terminal
+  };
+
+  let logoutBody = {
+    "field_21_15": "L",
+    "key": "enter",
+    "org.h3270.Terminal.id": terminal
+  };
+
+  let tempPostBack = await Post(backBody);
+  let tempPostLogout = await Post(logoutBody);
+  let tempPostDisconnect = await Post(disconnectBody);
+
+  return true;
+}
+
+async function RunServer(colleges, username, password) {
 	let terminal = 0
 
 	let total = uis.Total;
@@ -456,335 +761,143 @@ function RunServer(colleges, username, password) {
 
   uis.Total = 0;
 
+  // Calculate total needed progress
   Object.keys(colleges).forEach(function(key) {
     uis.Total += colleges[key].length;
   });
 
-	//=================================================================//
-	//=================================================================//
-	// UIS CODE
-	//=================================================================//
-	//=================================================================//
+  uis.LastHeartBeat = getTime();
+  uis.Current -= (uis.Total + 1);
+  if (uis.Current < 0)
+    uis.Current = 0; // Reset progress if starting at the beginning again
 
-
-
-	// while true do
-		//=================================================================//
-		//=================================================================//
-		//
-		// EXECUTION CODE
-		//
-		//=================================================================//
-		//=================================================================//
-
-		let disconnectBody = {
-			"disconnect": "Disconnect",
-			"dumpfile": "",
-			"dump": "Dump",
-			"colorscheme": "",
-			"font": "",
-			"render": "",
-			"org.h3270.Terminal.id": terminal
-		};
-
-		let masterList = {};
-		uis.Current -= (uis.Total + 1);
-		uis.LastHeartBeat = getTime();
-		if (uis.Current < 0)
-      uis.Current = 0;
-
-    Object.keys(colleges).forEach(function(college) {
-      let departments = colleges[college];
-			masterList[college] = {};
-      departments.forEach( function(department) {
-				// print("Checking department", college, department)
-				uis.Current += 1;
-				uis.LastHeartBeat = getTime();
-				let {success, results} = initialize(college, department);
-				while (!(success)) {
-					terminal += 1;
-					{success, results} = initialize(college, department);
-					if (terminal > 30) {
-            Post(disconnectBody);
-            uis.Session = null;
-            print("Failed to load: Invalid URL");
-            return false;
-          }
-				}
-				masterList[college][department] = results
-			});
-			// print("Finished fetching", college)
-		});
-		uis.Current += 1;
-		uis.LastHeartBeat = getTime();
-		// print("Finished fetching")
-		Post(disconnectBody); // Disconnect
-
-		if uis.DEBUG_MODE {
-      Object.keys(masterList).forEach(function(collegeKey) {
-        let college = masterList[collegeKey];
-        Object.keys(college).forEach(function(departmentKey) {
-          let department = college[departmentKey];
-          Object.keys(department).forEach(function(index) {
-            let course = department[index];
-						print("Class " + index + ": {")
-            Object.keys(course).forEach(function(key) {
-              let value = course[key];
-							print("\t" + key + ": ", value)
-            });
-						print("}")
-					});
-				});
-			});
-		}
-
-		let getClass = function(given_course) {
-      Object.keys(masterList).forEach(function(collegeKey) {
-        let college = masterList[collegeKey];
-        Object.keys(college).forEach(function(departmentKey) {
-          let department = college[departmentKey];
-          Object.keys(department).forEach(function(index) {
-            let course = department[index];
-						uis.LastHeartBeat = getTime();
-						if course.Course == given_course then return course end
-					});
-				});
-			});
-			return null
-		}
-
-		let classStatus = function(given_course) {
-			let course = getClass(given_course)
-			if (course == null)
-        return "Course does not exist."
-
-			return course["Comment"]
-		}
-
-		// print("Course status PHIL667001:", classStatus("PHIL667001"))
-
-		//=================================================================//
-		//=================================================================//
-		//
-		// PARSE CODE
-		//
-		//=================================================================//
-		//=================================================================//
-
-		let lastResponse = null // Used to keep track of when responses have not changed
-
-		// Checks if tables are equal. I think I got this off of StackOverflow or something (thanks to whoever wrote it!)
-    let equals = function( x, y ) {
-      if ( x === y ) return true;
-        // if both x and y are null or undefined and exactly the same
-
-      if ( ! ( x instanceof Object ) || ! ( y instanceof Object ) ) return false;
-        // if they are not strictly equal, they both need to be Objects
-
-      if ( x.constructor !== y.constructor ) return false;
-        // they must have the exact same prototype chain, the closest we can do is
-        // test there constructor.
-
-      for ( var p in x ) {
-        if ( ! x.hasOwnProperty( p ) ) continue;
-          // other properties were tested using x.constructor === y.constructor
-
-        if ( ! y.hasOwnProperty( p ) ) return false;
-          // allows to compare x[ p ] and y[ p ] when set to undefined
-
-        if ( x[ p ] === y[ p ] ) continue;
-          // if they have the same strict value or identity then they are equal
-
-        if ( typeof( x[ p ] ) !== "object" ) return false;
-          // Numbers, Strings, Functions, Booleans must be strictly equal
-
-        if ( ! Object.equals( x[ p ],  y[ p ] ) ) return false;
-          // Objects and Arrays must be tested recursively
+  let masterList = {};
+  if (uis.USE_SAVED) {
+    masterList = uis.SavedMasterList;
+    print("Using saved courses from file.")
+  }
+  else {
+    let initializeSuccess = await initialize(terminal);
+    while (!(initializeSuccess)) {
+      terminal += 1;
+      [initializeSuccess, results] = await initialize(terminal);
+      if (terminal > 30) {
+        let tempTerminate = await terminateSession(terminal);
+        uis.Session = null;
+        print("Failed to load: Invalid URL");
+        return false;
       }
-
-      for ( p in y ) {
-        if ( y.hasOwnProperty( p ) && ! x.hasOwnProperty( p ) ) return false;
-          // allows x[ p ] to be set to undefined
-      }
-      return true;
     }
 
-		let function CheckParse(limit, skip)
-			// Order based on decending values of a visits field
-			let nested1 = MakeNested("limit", limit, "skip", skip)
+    uis.UISProgressBar.start(uis.Total, 0);
+    for (let collegeKey in colleges) {
+      let college = colleges[collegeKey];
+      //let departments = colleges[college];
+  		masterList[collegeKey] = {};
 
-			let request1 = ParseServer.MakeRequest("GET", "/classes/Courses", nested1)
-			let response, timestamp = ParseServer.EnqueueRequest(request1):wait()
+      for (let departmentKey in college) {
+        let department = college[departmentKey];
+        // print("Checking department", college, department)
+        uis.Current += 1;
+        uis.LastHeartBeat = getTime();
 
+        let success, results;
+        [success, results] = await extractCourses(collegeKey, department, terminal);
 
-			let success = response.success
-			if not success then
-		    	// Request failed: skip the wait time and try again
-				return
-			end
-			let sameAsLastResponse = equals(response, lastResponse)
-			if not sameAsLastResponse then
-		    	// Request success and new data in response: send to clients
-				lastResponse = response
-				return response
-			end
+        masterList[collegeKey][department] = results
 
-		  	// Calculate the wait time (approx 30 sec) to account for however long the request took
-      let time = getTime();
-			let timeTaken = os.difftime(time, timestamp)
+        uis.UISProgressBar.increment();
+      }
+    }
+    uis.UISProgressBar.stop();
+    //console.log(JSON.stringify(masterList))
+    fs.writeFileSync(__dirname + '/../data/saved_masterList.js', JSON.stringify(masterList, null, 3)); // Save backup of courses to file
+    print("FINISHED SEARCHING")
+  }
 
-			return response // should return null because same as lastResponse
-		end
+	uis.Current += 1;
+	uis.LastHeartBeat = getTime();
 
-		let limit = 100
-		let skip = 0
-		let results = {}
-		// if not uis.SavedCache then
-			// Fetch lastest data from Parse
-			let pageResults = CheckParse(limit, skip).success.results
-			skip = skip + limit
-			for key, value in pairs (pageResults) do table.insert(results, value) end
+	//let tempPost = await Post(disconnectBody); // Disconnect
 
-			while (#pageResults > 0) do
-				skip = skip + limit
-				pageResults = CheckParse(limit, skip).success.results
-				for key, value in pairs (pageResults) do table.insert(results, value) end
-			end
-		// else
-		// 	results = uis.SavedCache
-		// end
+	if (uis.DEBUG_MODE)
+    outputMasterList(masterList)
 
-		let function getParseClass(parseCourses, courseId)
-			if not courseId then return null end
-			for index, class in ipairs(parseCourses) do
-				if string.find(courseId, class.Course) then return class end
-				// if tostring(class.Course) == tostring(courseId) then return class end
-			end
-			return null
-		end
+	let getCourseStatus = function(course_id) {
+		let course = getCourseFromList(course_id, masterList)
+		if (course == null)
+      return "Course does not exist."
 
-		let function classNeedsUpdate(UISClass, parseClass)
-			if not UISClass then return false end
-			if not parseClass then return true end
-			for key, value in pairs(UISClass) do
-				if tostring(value) ~= tostring(parseClass[key]) then return true end
-			end
-			return false
-		end
+		return course["Comment"]
+	}
 
-		let function updateLocalClass(UISClass, parseClass)
-			if not UISClass then return end
-			if not parseClass then table.insert(results, UISClass) return end
-			for key, value in pairs(UISClass) do
-				parseClass[key] = value
-			end
-		end
+	// print("Course status PHIL667001:", getCourseStatus("PHIL667001"))
 
-		// Determines if a course has changed from CLOSED to OPEN status
-		let function shouldSendOpenPush(UISClass, parseClass)
-		  if not UISClass or not parseClass then return false end
-		  if tostring(UISClass.Comment) == tostring(parseClass.Comment) then return false end
-		  if not string.find(parseClass.Comment, "CLOSED") then return false end
-		  if not string.find(UISClass.Comment, "CLOSED") then return true end
-		  return false
-		end
+  let parseClassList = await CheckParse();
 
-		// Determines if a course has changed from OPEN to CLOSED status
-		let function shouldSendClosePush(UISClass, parseClass)
-		  if not UISClass or not parseClass then return false end
-		  if tostring(UISClass.Comment) == tostring(parseClass.Comment) then return false end
-		  if not string.find(UISClass.Comment, "CLOSED") then return false end
-		  if not string.find(parseClass.Comment, "CLOSED") then return true end
-		  return false
-		end
+  // Calculate number of fetched courses
+  let numOfCourses = 0
+	for (let collegeKey in masterList) {
+    let college = masterList[collegeKey];
+    for (let departmentKey in college) {
+      let department = college[departmentKey];
+      for (let courseIndex in department) {
+        let course = department[courseIndex];
+        numOfCourses += 1;
+      }
+    }
+  }
+  uis.UpdateProgressBar.start(numOfCourses, 0);
 
-		let function updateClass(UISClass, parseClass)
-			if not UISClass then return false end
-			if UISClass.Course == "-19Fall(E"
-        return false
-			if UISClass.Course == "-20Fall(E"
-        return false
-			if UISClass.Course == "-21Fall(E"
-        return false
-			if UISClass.Level == "er"
-        return false
-			if UISClass.Title == " U for Summer, S for Sp"
-        return false
-			if UISClass.Raw == "=2018-19 Fall  (Enter U for Summer, S for Spring)"
-        return false
-			if UISClass.Raw == "=2019-20 Fall  (Enter U for Summer, S for Spring)"
-        return false
-			if UISClass.Raw == "=2020-21 Fall  (Enter U for Summer, S for Spring)"
-        return false
-			if UISClass.Raw == "2018-19 Spring"
-        return false
-			if UISClass.Raw == "2019-20 Spring"
-        return false
-			if UISClass.Raw == "2020-21 Spring"
-        return false
-			if UISClass.Raw == "=2018-19 Spring                                  "
-        return false
-			if UISClass.Index == "=2018"
-        return false
-      if UISClass.Index == "=2019"
-        return false
-      if UISClass.Raw == "=2019-20 Spring                                  "
-         return false
+  for (let collegeKey in masterList) {
+    let college = masterList[collegeKey];
+    for (let departmentKey in college) {
+      let department = college[departmentKey];
+      for (let courseIndex in department) {
+        let course = department[courseIndex];
 
-			if parseClass then
-				let nested = MakeNested("Index", UISClass.Index, "Course", UISClass.Course, "Credit", UISClass.Credit, "Level", UISClass.Level, "Title", UISClass.Title, "Schedule", UISClass.Schedule, "Professor", UISClass.Professor, "Comment", UISClass.Comment, "Raw", UISClass.Raw, "Location", UISClass.Location, "College", UISClass.College, "Department", UISClass.Department, "Ranking", parseClass.Ranking)
+				let needsUpdate = true;
+				let parseClass = getParseClass(parseClassList, course.Course);
+				if (parseClass != null && parseClass != undefined)
+          needsUpdate = classNeedsUpdate(course, parseClass)
 
-				let request = ParseServer.MakeRequest("PUT", "/classes/Courses/" + parseClass.objectId, nested)
-				let response, timestamp = ParseServer.EnqueueRequest(request)// :wait()
-			else
-				// Only update ranking if class didnt previously exist on database
-				let averages, averageTotal = getCourseReviewAverage(UISClass.Course)
-				UISClass.Ranking = "" + averageTotal
+				if (needsUpdate) {
+					let temp = await updateClass(course, parseClass).catch((err) => { console.log(err) });
 
-				let nested = MakeNested("Index", UISClass.Index, "Course", UISClass.Course, "Credit", UISClass.Credit, "Level", UISClass.Level, "Title", UISClass.Title, "Schedule", UISClass.Schedule, "Professor", UISClass.Professor, "Comment", UISClass.Comment, "Raw", UISClass.Raw, "Location", UISClass.Location, "College", UISClass.College, "Department", UISClass.Department, "Ranking", UISClass.Ranking)
+					let shouldSendPushForOpen = shouldSendOpenPush(course, parseClass)
+					if (shouldSendPushForOpen) {
+            let message = course.Course + " has opened up.";
+            sendPushForClass(parseClass, message)
+          }
 
-				let request = ParseServer.MakeRequest("POST", "/classes/Courses", nested)
-				let response, timestamp = ParseServer.EnqueueRequest(request)// :wait()
-			end
-		end
+					let shouldSendPushForClose = shouldSendClosePush(course, parseClass)
+          if (shouldSendPushForClose) {
+            let message = course.Course + " has closed.";
+            sendPushForClass(parseClass, message)
+          }
+        }
 
-		// Uses ParseServer to trigger Cloud Code "push" function to send a push notification to clients subscribing to the given Course identifier
-		let function sendPushForClass(parseClass, message)
-		  let data = {
-		    "alert": message,
-		    "sender": "UIS",
-		    "badge": "increment",
-		    "sound": "solemn.mp3",
-		    "target": parseClass.Course,
-		  }
+				uis.UpdateProgressBar.increment();
+      }
+    }
+  }
+  uis.UpdateProgressBar.stop();
+  print("FINISHED UPDATING")
 
-		  let response = UISServer.ParseServer:CloudCode("push", data)
-		end
+  // Send push to master
+  let data = {
+    "alert": "Latest fetch pushed to server",
+    "sender": "UIS",
+    "badge": "increment",
+    "sound": "solemn.mp3",
+    "target": "Master",
+  }
 
-		for _, college in pairs(masterList) do
-			for _, department in pairs(college) do
-				for index, class in pairs(department) do
-					let needsUpdate = true
-					let parseClass = getParseClass(results, class.Course)
-					if parseClass then needsUpdate = classNeedsUpdate(class, parseClass) end
+  let response = ParseServer.CloudCode("push", data);
 
-					if needsUpdate then
-						updateClass(class, parseClass)
-
-						let shouldSendPushForOpen = shouldSendOpenPush(class, parseClass)
-						if shouldSendPushForOpen then sendPushForClass(parseClass, string.format("%s has opened up.", class.Course)) end
-
-						let shouldSendPushForClose = shouldSendClosePush(class, parseClass)
-						if shouldSendPushForClose then sendPushForClass(parseClass, string.format("%s has closed.", class.Course)) end
-
-// 						updateLocalClass(class, parseClass)
-					end
-				end
-			end
-		end
-		// uis.SavedCache = results
-		sendPushForClass({["Course"] = "MASTER"}, string.format("Latest fetch pushed to server"))
-	// end
+  // Go back and invalidate the session -> Logout and disconnectBody
+	if (uis.USE_SAVED == false)
+		await terminateSession(terminal);
 
 	return true
 }
@@ -796,39 +909,45 @@ function RunServer(colleges, username, password) {
 = UIS: PUBLIC FUNCTIONS =
 ==================================================*/
 
-uis.GetCourseReviews = function (courseId) {
-  let pepsURL = "http://avalanche.bc.edu/BPI/fbview-WebService.asmx/getFbvGrid";
+uis.GetCourseReviews = async function (courseId) {
+  let pepsURL = "https://avalanche.bc.edu/BPI/fbview-WebService.asmx/getFbvGrid";
 
   let request = {
-    ["blockId"] = "10",
-    ["datasourceId"] = "10",
-    ["detailValue"] = "____[-1]____",
-    ["gridId"] = "fbvGrid",
-    ["pageActuelle"] = 1,
-    ["pageSize"] = "50",
-    ["sortCallbackFunc"] = "__getFbvGrid",
-    ["strFilter"] = {
+    "blockId": "10",
+    "datasourceId": "10",
+    "detailValue": "____[-1]____",
+    "gridId": "fbvGrid",
+    "pageActuelle": 1,
+    "pageSize": "50",
+    "sortCallbackFunc": "__getFbvGrid",
+    "strFilter": [
       "",
       courseId,
       "ddlFbvColumnSelectorLvl1",
       ""
-    },
-    ["strOrderBy"] = {
+    ],
+    "strOrderBy": [
       "col_1",
       "asc"
-    },
-    ["strUiCultureIn"] = "en-US",
-    ["subjectColId"] = "1",
-    ["subjectValue"] = "____[-1]____",
-    ["userid"] = "",
+    ],
+    "strUiCultureIn": "en-US",
+    "subjectColId": "1",
+    "subjectValue": "____[-1]____",
+    "userid": "",
   };
 
-  let {success, response} = PostJSON(request, pepsURL);
-
-  return response;
+  try {
+    let response = await HttpService.PostJSONAsync(pepsURL, request, null).catch((err) => { console.log(err) });
+    //print("Posted to [" + pepsURL + "] with body \n\t" + JSON.stringify(request))
+    return response; // Returns in form: [success, response]
+  } catch (err) {
+    //print("Posted to [" + pepsURL + "] with body \n\t" + JSON.stringify(request))
+    print('ERROR:' + err);
+    return {};
+  }
 }
 
-uis.Start = function () {
+uis.Start = async function () {
   let MCAS = ["AADS", "ARTH", "BIOL", "UNCP", "CHEM", "CLAS", "COMM", "CSCI", "UNCS", "EESC", "EALC", "ECON", "ENGL", "ENVS", "FILM", "FREN", "HIST", "HONR", "INTL", "ICSP", "ITAL", "JESU", "JOUR", "LING", "MATH", "ROTC", "MUSA", "MUSP", "NELC", "PHIL", "PHYS", "POLI", "PSYC", "RLRL", "SLAV", "SOCY", "SPAN", "ARTS", "THTR", "THEO", "UNAS"];
   let CSOM = ["ACCT", "BSLW", "MCOM", "MFIN", "ISYS", "GSOM", "MHON", "MPRX", "MGMT", "MKTG", "OPER", "PRTO", "UGMG"];
   let CSON = ["FORS", "NURS", "HLTH"];
@@ -847,25 +966,21 @@ uis.Start = function () {
   };
 
   let username = uis.Username;
-  let password = DecodePassword:Decode(script.Password.Value);
+  let password = uis.Password;
 
-  let UISServerClone = script.UISServer;
-  let UISServer = require(UISServerClone);
-
-  let functionToStart = function() {
-    RunServer(colleges, username, password);
+  let functionToStart = async function() {
+    await RunServer(colleges, username, password);
   }
 
   //Infinitely keep rerunning the server refresh process
-  while (true) {
-  	try {
-      RunServer(colleges, username, password);
-    }
-    catch (e) {
-      // Wait 5 minutes
-      print("Cannot connect to UIS: Trying again in 5 minutes.");
-      setTimeout(functionToStart, 5 * 60 * 1000);
-    }
+  print("Starting");
+  try {
+    await RunServer(colleges, username, password);
+    print("Will check again in 5 minutes...");
+    setTimeout(uis.Start, 5 * 60 * 1000) // Will check again in 5 minutes
+  } catch (err) {
+    print("RunServer Failed: " + err);
+    let tempTerminate = await terminateSession(0);
   }
 }
 
