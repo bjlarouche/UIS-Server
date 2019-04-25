@@ -198,7 +198,7 @@ HttpService.PostAsync = function(url, body, header) {
 		try {
 			return [true, JSON.parse(body)];
 		}
-		catch {
+		catch (err) {
 			return [false, null];
 		}
 
@@ -224,7 +224,7 @@ HttpService.GetAsync = function(url, header) {
 		try {
 			return [true, JSON.parse(body)];
 		}
-		catch {
+		catch (err) {
 			return [false, null];
 		}
 
