@@ -26,7 +26,7 @@ var fs = require('fs');
 ==================================================*/
 
 //Used to read config file JSON
-const config = require(__dirname + '/../../config/config');
+const config = require(__dirname + '/../config/config');
 
 /* END FOLD */
 
@@ -89,32 +89,100 @@ function print( ...args) {
 = HttpService: PUBLIC FUNCTIONS =
 ==================================================*/
 
-HttpService.JSONEncode = (json) {
+HttpService.JSONEncode = function (json) {
 	return JSON.stringify(json);
 }
 
-HttpService.JSONDecode = (string) {
-	return JSON.parse(string);
+HttpService.JSONDecode = function (str) {
+	return JSON.parse(str);
 }
 
 HttpService.PostSync = function(url, body, header) {
 	if (header == null || header == undefined)
-		header = { 'Content-Type': 'application/json' };
-	else
-		header['Content-Type'] = 'application/json';
+		header = {
+			'Content-Type': 'application/x-www-form-urlencoded',
+			'cache-control': 'no-cache',
+		};
+	else {
+		header['cache-control'] = 'no-cache';
+		header['Content-Type'] = 'application/x-www-form-urlencoded';
+	}
 
 	var response = syncRequest('POST', url, {
 		'headers': header,
-		'body': body
+		'body': JSON.stringify(body)
 	});
 
 	try {
-		let bodyJSON = JSON.parse(response.getBody());
-		return bodyJSON;
+		let responseString = response.getBody().toString();
+		return responseString;
 	}
-	catch {
-		return null;
+	catch (err) {
+		return "";
 	}
+}
+
+HttpService.PostUISAsync = function(url, body, header) {
+	var options = { method: 'POST',
+  url: url,
+  headers:
+   { 'cache-control': 'no-cache',
+     'Content-Type': 'application/x-www-form-urlencoded' },
+  form: body };
+
+	return new Promise((resolve, reject) => {
+        request(options, (error, response, body) => {
+            if (error) reject(error);
+            if (response.statusCode != 200) {
+                reject('Invalid status code <' + response.statusCode + '>');
+            }
+            resolve(body);
+        });
+    });
+	// if (header == null || header == undefined)
+	// 	header = {
+	// 		'Content-Type': 'application/x-www-form-urlencoded',
+	// 		'cache-control': 'no-cache',
+	// 	};
+	// else {
+	// 	header['cache-control'] = 'no-cache';
+	// 	header['Content-Type'] = 'application/x-www-form-urlencoded';
+	// }
+	//
+	// var response = syncRequest('POST', url, {
+	// 	'headers': header,
+	// 	'json': body
+	// });
+	//
+	// try {
+	// 	let responseString = response.getBody().toString();
+	// 	print("Got response " + responseString)
+	// 	return responseString;
+	// }
+	// catch (err) {
+	// 	print(err);
+	// 	return "";
+	// }
+}
+
+HttpService.PostJSONAsync = function(url, body, header) {
+	var options = { method: 'POST',
+  url: url,
+  headers:
+   { 'cache-control': 'no-cache',
+     'Content-Type': 'application/json' },
+  body: body,
+	json: true };
+
+	return new Promise((resolve, reject) => {
+        request(options, (error, response, body) => {
+            if (error) reject(error);
+            if (response.statusCode != 200) {
+                reject('Invalid status code <' + response.statusCode + '>');
+            }
+            resolve(body);
+        });
+    });
 }
 
 HttpService.PostAsync = function(url, body, header) {
@@ -123,19 +191,21 @@ HttpService.PostAsync = function(url, body, header) {
 	else
 		header['Content-Type'] = 'application/json';
 
-	fetch(url, { method: 'POST', body: body, headers: headers })
+	fetch(url, { method: 'POST', body: body, headers: header })
 	.then(function(res) {
 		return res.text();
 	}).then(function(body) {
 		try {
-			return { success: true, response: JSON.parse(body) };
+			return [true, JSON.parse(body)];
 		}
 		catch {
-			return { success: false, response: null }
+			return [false, null];
 		}
 
-		return { success: false, response: null }
+		return [false, null];
 	});
+
+	return [false, null];
 }
 
 HttpService.GetSync = function(url, header) {
@@ -152,13 +222,13 @@ HttpService.GetAsync = function(url, header) {
 		return res.text();
 	}).then(function(body) {
 		try {
-			return { success: true, response: JSON.parse(body) };
+			return [true, JSON.parse(body)];
 		}
 		catch {
-			return { success: false, response: null }
+			return [false, null];
 		}
 
-		return { success: false, response: null }
+		return [false, null];
 	});
 }
 
