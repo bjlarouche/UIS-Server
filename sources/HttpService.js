@@ -224,7 +224,7 @@ HttpService.GetAsync = function(url, header) {
 		try {
 			return [true, JSON.parse(body)];
 		}
-		catch (err) {}
+		catch (err) {
 			return [false, null];
 		}
 
