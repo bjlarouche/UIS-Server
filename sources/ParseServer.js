@@ -26,7 +26,7 @@ var fs = require('fs');
 ==================================================*/
 
 //Used to read config file JSON
-const config = require(__dirname + '/../../config/config');
+const config = require(__dirname + '/../config/config');
 
 // Used for Http requests
 var HttpService = require(__dirname + '/../sources/HttpService');
@@ -115,9 +115,12 @@ function comparator(a, b) {
 // Splits data up into needed URL formatting
 function makeBody(data) {
 	let body = "";
-	for i,v in pairs(data) {
-		body = body + "&" + i + '=' + encodeURI(v);
-	}
+
+	Object.keys(data).forEach(function(key) {
+      let value = data[key];
+			body = body + "&" + key + '=' + encodeURI(value);
+  });
+
 	return body
 }
 
@@ -171,124 +174,67 @@ ParseServer.Get = function(course) {
 }
 
 // Creates a new object of the given class with fields specified inn body
-ParseServer.Post = function(class, body) {
+ParseServer.Post = function(course, body) {
 	let url = ParseServer.Url + "classes" + course;
 
 
 	let newbody = HttpService.JSONEncode(body)
 
 	let header = {
-		["X-Parse-Application-Id"] = ParseServer.AppId,
-		["X-Parse-REST-API-Key"] = ParseServer.RESTKey,
-		//["X-Parse-Master-Key"] = ParseServer.MasterKey  // Optional. Less secure.
+		"X-Parse-Application-Id": ParseServer.AppId,
+		"X-Parse-REST-API-Key": ParseServer.RESTKey,
+		//"X-Parse-Master-Key": ParseServer.MasterKey  // Optional. Less secure.
 	}
 
-	let {success, response} = HttpService.PostAsync(url, newbody, header)
+	let success, response;
+	[success, response] = HttpService.PostAsync(url, newbody, header)
 
-	return response
+	return [success, response]
 }
 
 // Triggers functionId in the ParseServer's main.js with rawContent parameters for that function
 ParseServer.CloudCode = function (functionId, rawContent) {
 	// functionId and actionId must be supported/handled by cloud code
-	let url = ParseServer.Url + "classes" + course;
+	let url = ParseServer.Url + "/functions/" + functionId;
+	print("Sending push notification to: " + url)
 	let header = {
-		["X-Parse-Application-Id"] = ParseServer.AppId,
-		["X-Parse-REST-API-Key"] = ParseServer.RESTKey,
-		// ["X-Parse-Master-Key"] = ParseServer.MasterKey  // Optional. Less secure.
-	}
+		"X-Parse-Application-Id": ParseServer.AppId,
+		"X-Parse-REST-API-Key": ParseServer.RESTKey,
+		// "X-Parse-Master-Key": ParseServer.MasterKey  // Optional. Less secure.
+	};
 
-	let body = makeBody(rawContent)
+	//let body = makeBody(rawContent);
+	let body = JSON.stringify(rawContent);
 
-	let {success, response} = HttpService.PostAsync(url, body, header)
-	return response
+	let success, response;
+
+	[success, response] = HttpService.PostAsync(url, body, header);
+	return response;
 }
 
-// POSTs batch table of requests and returns table of responses
-// ParseServer.BatchPost = function(requests) {
-// 	let url = string.format("%s/batch", ParseServer.Url)
-//
-// 	let body = {
-// 		["requests"] = requests
-// 	}
-//
-// 	let newbody = HttpService.JSONEncode(body)
-//
-// 	let header = {
-// 		["X-Parse-Application-Id"] = ParseServer.AppId,
-// 		["X-Parse-REST-API-Key"] = ParseServer.RESTKey,
-// 		["X-Parse-Master-Key"] = ParseServer.MasterKey // Optional. Less secure.
-// 	}
-//
-// 	let success, post = pcall(function() return HttpService.PostAsync(url, newbody, header) end)
-// 	while not success do
-// 		success, post = pcall(function() return HttpService.PostAsync(url, newbody, header) end)
-// 	end
-// 	return post
-// }
+//POSTs batch table of requests and returns table of responses
+ParseServer.BatchPost = function(requests) {
+	let url = ParseServer.Url + "/batch";
 
-// Adds a request to the PriorityQueue based on timestamp (oldest = highest)
-// ParseServer.EnqueueRequest = function(request) {
-// 	let signal = Signal.Create()
-// 	let timestamp = os.time()
-//
-// 	let queueRequest = {
-// 		["request"] = request,
-// 		["signal"] = signal,
-// 		["timestamp"] = timestamp,
-// 	}
-//
-// 	ParseServer.Queue:Add(queueRequest, timestamp)
-//
-// 	return signal
-// }
+	let body = {
+		"requests": requests
+	}
 
-// Pops BatchLimit number of requests from PriorityQueue, bundles them into a requests table for ParseServer:BatchPost(), and then fires the responses and timestamps back to whoever is listening for a reponse (the senders)
-// ParseServer.ExecuteQueue = function() {
-// 	let requests = {}
-// 	let timestamps = {}
-// 	let signals = {}
-//
-// 	let queueSize = ParseServer.Queue:Size()
-// 	if queueSize > ParseServer.BatchLimit then queueSize = ParseServer.BatchLimit end // Limited requests per batch
-//
-// 	for i=1, queueSize do
-// 		let queueRequest = ParseServer.Queue:Pop()
-// 		table.insert(requests, queueRequest.request)
-// 		table.insert(signals, queueRequest.signal)
-// 		table.insert(timestamps, queueRequest.timestamp)
-// 	end
-//
-// 	let batchResponse = ParseServer:BatchPost(requests)
-// 	let responseTable = HttpService.JSONDecode(batchResponse)
-//
-// 	for i=1, #responseTable do
-// 		signals[i]:fire(responseTable[i], timestamps[i])
-// 	end
-//
-// 	return true
-// }
+	let newBody = HttpService.JSONEncode(body);
 
-// Requests will be sent every stepTime seconds, or when the BatchLimit is hit.
-// game:GetService("RunService").Heartbeat:Connect(function(step)
-// 	stepTime = stepTime + step
-//
-// 	let queueSize = ParseServer.Queue:Size()
-// 	if (queueSize >= ParseServer.BatchLimit or stepTime >= ParseServer.TimeOut) and not (batching or queueSize == 0) then
-// 		stepTime = 0
-// 		batching = true
-// 		let success = pcall(ParseServer:ExecuteQueue())
-// 		batching = false
-// 	end
-// end)
-//
-// // Forces queue to execute when server is ending
-// game.OnClose = function()
-// 	stepTime = 0
-// 	batching = true
-// 	let success = pcall(ParseServer:ExecuteQueue())
-// 	batching = false
-// end
+	let header = {
+		"X-Parse-Application-Id": ParseServer.AppId,
+		"X-Parse-REST-API-Key": ParseServer.RESTKey,
+		"X-Parse-Master-Key": ParseServer.MasterKey // Optional. Less secure.
+	}
+
+	let success, response;
+	[success, response] = HttpService.PostAsync(url, newBody, header)
+	// while (!(success)) {
+	// 	{success, post: response} = HttpService.PostAsync(url, newBody, header)
+	// }
+	return response
+}
 
 /* END FOLD */
 
