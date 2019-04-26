@@ -83,7 +83,7 @@ uis.UISURL = "https://registration.bc.edu/servlet";
 uis.Username = process.env.username;//config.UIS.username;
 uis.Password = process.env.password;//config.UIS.password;
 
-uis.Session = ";jsessionid=02BB40FB884B67D8E4E9165621CDEEB6";
+uis.Session = ";jsessionid=27862AFE536686029B0F4751B94EA11D";
 uis.SavedCache = null;
 uis.LastPostTime = null;
 uis.TotalInterim = 0;
