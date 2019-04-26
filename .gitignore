@@ -8,9 +8,7 @@ package-lock.json
 #For mac
 .DS_Store
 ./node_modules
-./data/saved_masterList.js
 
 #For windows
 config/auth_stash.js
 node_modules/
-data/saved_masterList.js
